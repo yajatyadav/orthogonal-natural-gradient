@@ -1,5 +1,6 @@
 # from ogd.ogd_core import *
 from ogd.ogd_core_new import *
+from ogd.ong_core import *
 from ogd.ntk import NTK
 
 from types import MethodType
@@ -23,10 +24,18 @@ def compute_gen_bound(kernels_list, labels_list) :
 
 class OGD:
     def __init__(self, agent_config, wandb_run, val_loaders):
+        assert (agent_config.ogd is True or agent_config.ogd_plus is True)
         self.config = agent_config
-        self.agent_model = AgentModel(config=self.config,
-                                      wandb_run=wandb_run,
-                                      val_loaders=val_loaders)
+        if self.config.ong:
+            print("will initialize thE ONG AGENTMODEL")
+            self.agent_model = AgentModel_ONG_MINE(config=self.config,
+                                        wandb_run=wandb_run,
+                                        val_loaders=val_loaders)
+        else:
+            print("will initialize the TRADITIONAL AGENTMODEL")
+            self.agent_model = AgentModel(config=self.config,
+                                          wandb_run=wandb_run,
+                                          val_loaders=val_loaders)
         self.task_id = 1
         # if self.config.is_split :
         #     self.ntk = NTK(loaders=val_loaders, kernel_size=100)

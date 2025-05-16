@@ -1,3 +1,5 @@
+lightning_logs/
+slurm-tmpdir/
 # repo-specific stuff
 data/
 outputs/

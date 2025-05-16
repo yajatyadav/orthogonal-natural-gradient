@@ -57,10 +57,11 @@ class AGEMAgent(AgentModel) :
             # assert torch.abs(check) < 1e-5
             return new_grad
 
-    def optimizer_step(self, current_epoch, batch_idx, optimizer, optimizer_idx,
-                       second_order_closure=None, using_native_amp=None):
+    def optimizer_step(self, current_epoch, batch_idx, optimizer, optimizer_idx, second_order_closure=None, on_tpu = False,using_native_amp=None, using_lbfgs = False):
         # self.model.train()
         # assert self.model.training
+        if second_order_closure is not None:
+            second_order_closure()
 
         task_key = str(self.task_id)
 

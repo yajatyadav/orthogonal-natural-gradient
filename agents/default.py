@@ -47,6 +47,7 @@ class NormalNN(nn.Module):
         # Sets up the optimiser, scheduler, decay ... :)
 
         n_trainable = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
+        print(f"The model is {self.model}")
         print(f"The model has {n_trainable} trainable parameters")
 
         optimizer_arg = {'params':self.model.parameters(),

@@ -25,6 +25,93 @@ class dotdict(dict):
     __delattr__ = dict.__delitem__
 
 
+
+import torch
+from tqdm import tqdm
+from math import sqrt
+
+def orthonormalize_custom(vectors,
+                   inner_prod,
+                   normalize: bool = True,
+                   start_idx: int = 0):
+    """
+    Orthonormalize the columns of `vectors` in place, using Gram–Schmidt
+    with a custom inner product.
+
+    Args:
+      vectors:       Tensor of shape (dim, n_basis).
+      inner_prod:    Function taking two (dim,) tensors → scalar tensor.
+      normalize:     Whether to L2‐normalize each vector after orthogonalizing.
+      start_idx:     Which column to start Gram–Schmidt from (0 ⇒ do all).
+    Returns:
+      The same Tensor `vectors`, with columns orthogonal (and normalized if requested).
+    """
+    dim, n = vectors.shape
+    assert n <= dim, "number of vectors must be ≤ ambient dimension"
+
+    # If requested, normalize the first column.
+    if normalize and start_idx == 0:
+        v0 = vectors[:, 0]
+        norm0 = torch.sqrt(inner_prod(v0, v0))
+        vectors[:, 0] = v0 / norm0
+
+    # start_idx=0 is a special case: we want to do columns 1…n−1
+    i0 = 1 if start_idx == 0 else start_idx
+
+    for i in tqdm(range(i0, n), desc="orthonormalizing ..."):
+        v = vectors[:, i]
+        # subtract off projections onto all previous basis vectors
+        for j in range(i):
+            u = vectors[:, j]
+            coeff = inner_prod(u, v)    # <u, v>
+            v = v - coeff * u           # subtract projection
+
+        # optional normalize
+        if normalize:
+            norm = torch.sqrt(inner_prod(v, v))
+            v = v / norm
+
+        vectors[:, i] = v
+
+    return vectors
+
+
+def project_vec_custom(vec,
+                proj_basis,
+                inner_prod):
+    """
+    Project `vec` onto the subspace spanned by the columns of `proj_basis`,
+    using a custom inner product.
+
+    Args:
+      vec:         Tensor of shape (dim,)
+      proj_basis:  Tensor of shape (dim, k), columns are basis vectors
+      inner_prod:  Function taking two (dim,) tensors → scalar tensor.
+    Returns:
+      The projected vector of shape (dim,)
+    """
+    if proj_basis.numel() == 0:
+        return torch.zeros_like(vec)
+
+    # accumulate sum_j <u_j, vec> u_j
+    projection = torch.zeros_like(vec)
+    for j in range(proj_basis.shape[1]):
+        uj = proj_basis[:, j]
+        coeff = inner_prod(uj, vec)
+        projection = projection + coeff * uj
+
+    return projection
+
+
+
+
+
+
+
+
+
+
+
 def orthonormalize(vectors, gpu, normalize=True, start_idx=0):
     assert (vectors.size(1) <= vectors.size(0)), 'number of vectors must be smaller or equal to the dimension'
     # TODO : Check if start_idx is correct :)
@@ -68,7 +155,12 @@ def parameters_to_grad_vector(parameters):
         # Ensure the parameters are located in the same device
         param_device = _check_param_device(param, param_device)
 
-        vec.append(param.grad.view(-1))
+        ## YY: fix for case when param.grad is None at the very start
+        if param.grad is None:
+            # no gradient → zero vector of appropriate length
+            vec.append(torch.zeros(param.numel(), device=param_device))
+        else:
+            vec.append(param.grad.view(-1))
     return torch.cat(vec)
 
 

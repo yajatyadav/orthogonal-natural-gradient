@@ -1,5 +1,5 @@
 import os
-SLURM_TMPDIR = os.environ.get('SLURM_TMPDIR')
+SLURM_TMPDIR = os.environ.get('SLURM_TMPDIR', './slurm-tmpdir')
 
 import torch
 from random import shuffle
@@ -14,8 +14,28 @@ from tap import Tap
 import numpy as np
 import os
 from tqdm import tqdm
-from typing import List
+from typing import List, Optional
 import time
+
+
+def compute_fgt(data):
+    """
+    Given a TxT data matrix, compute average forgetting at T-th task
+    """
+    data = np.array(data)
+    num_tasks = data.shape[0]
+    T = num_tasks - 1
+    fgt = 0.0
+    task_fgt = []
+    for i in range(T):
+        x = np.max(data[:T, i])
+        y = data[T, i]
+        print(x, y)
+        fgt_i = x - y
+        task_fgt.append(fgt_i)
+        fgt += fgt_i
+    avg_fgt = fgt/ float(num_tasks - 1)
+    return avg_fgt, task_fgt
 
 
 def prepare_dataloaders(args):
@@ -90,15 +110,24 @@ def run(args, wandb_run, task_output_space, n_tasks, train_dataset_splits, val_d
     
     # agent_type : regularisation / ogd_plus / agem
     # agent_name : EWC / SI / MAS
-    agent = agents.__dict__[args.agent_type].__dict__[args.agent_name](agent_config,
-                                                                       val_loaders=val_loaders,
-                                                                       wandb_run=wandb_run)
+    agent_func = agents.__dict__[args.agent_type].__dict__[args.agent_name]
+    agent = agent_func(agent_config,
+                       val_loaders=val_loaders,
+                       wandb_run=wandb_run)
+    # agent = agents.__dict__[args.agent_type].__dict__[args.agent_name](agent_config,
+    #                                                                   val_loaders=val_loaders,
+    #                                                                   wandb_run=wandb_run)
+    
+    print("✅✅✅✅✅ USING AGENT : ", agent)
     # Decide split ordering
     task_names = sorted(list(task_output_space.keys()), key=int)
     print('Task order:', task_names)
     if args.rand_split_order:
         shuffle(task_names)
         print('Shuffled task order:', task_names)
+    
+    # Store validation accuracies for each task at each time step
+    val_accs_history = []
     
     if args.offline_training:  # Multi-task learning
         train_dataset_all = torch.utils.data.ConcatDataset(train_dataset_splits.values())
@@ -115,7 +144,9 @@ def run(args, wandb_run, task_output_space, n_tasks, train_dataset_splits, val_d
         val_accs = [agent.validation(loader) for loader in val_loaders]
         print(f"val_accs : {val_accs} ")
         wandb.run.summary.update({f"R_-1": val_accs})
-
+        val_accs_history.append(val_accs)
+        num_val_samples_per_task = [len(val_dataset_splits[task_name]) for task_name in task_names]
+        num_train_samples_per_task = [len(train_dataset_splits[task_name]) for task_name in task_names]
         for i in tqdm(range(len(task_names)), "task"):
             task_name = task_names[i]
             print(f'====================== Task {task_name} =======================')
@@ -125,9 +156,6 @@ def run(args, wandb_run, task_output_space, n_tasks, train_dataset_splits, val_d
             val_loader = torch.utils.data.DataLoader(val_dataset_splits[task_name],
                                                      batch_size=args.batch_size, shuffle=False,
                                                      num_workers=args.workers)
-            # TODO : Add this part ASAP
-            # if args.incremental_class:
-            #     agent.add_valid_output_dim(task_output_space[task_name])
 
             # Train the agent
             agent.learn_batch(train_loader, val_loader)
@@ -135,124 +163,140 @@ def run(args, wandb_run, task_output_space, n_tasks, train_dataset_splits, val_d
             val_accs = [agent.validation(loader) for loader in val_loaders]
             print(f"val_accs : {val_accs} ")
             wandb.run.summary.update({f"R_{i}": val_accs})
+            val_accs_history.append(val_accs)
+
+    # Compute forgetting metrics
+    avg_forgetting, task_forgetting = compute_fgt(val_accs_history)
+    avg_acc = sum(val_accs_history[-1])/len(val_accs_history[-1])
+    
+    # Print detailed forgetting metrics
+    print("\n========== Forgetting Metrics ==========")
+    print(f"Average Forgetting: {avg_forgetting:.4f}")
+    print("\nPer-Task Forgetting:")
+    for i, fgt in enumerate(task_forgetting):
+        print(f"Task {i}: {fgt:.4f}")
+    print(f"Average Accuracy: {avg_acc:.4f}")
+    print(f"Number of validation samples per task: {num_val_samples_per_task}")
+    print(f"Number of training samples per task: {num_train_samples_per_task}")
+
+    
+    # Log metrics to wandb
+    wandb.run.summary.update({
+        "avg_forgetting": avg_forgetting,
+        "task_forgetting": task_forgetting,
+        "avg_acc": avg_acc,
+        "num_val_samples_per_task": num_val_samples_per_task,
+        "num_train_samples_per_task": num_train_samples_per_task
+    })
+
+    # Save metrics to text file
+    metrics_file = os.path.join(wandb.run.dir, 'forgetting_metrics.txt')
+    with open(metrics_file, 'w') as f:
+        f.write("========== Validation Accuracy History ==========\n")
+        for i, accs in enumerate(val_accs_history):
+            f.write(f"Step {i}: {accs}\n")
+        
+        f.write("\n========== Forgetting Metrics ==========\n")
+        f.write(f"Average Forgetting: {avg_forgetting:.4f}\n")
+        
+        f.write("\nPer-Task Forgetting:\n")
+        for i, fgt in enumerate(task_forgetting):
+            f.write(f"Task {i}: {fgt:.4f}\n")
+        
+        f.write("\n========== Accuracy Metrics ==========\n")
+        f.write(f"Average Accuracy: {avg_acc:.4f}\n")
+
+        f.write("\n========== Number of Samples ==========\n")
+        f.write(f"Number of validation samples per task: {num_val_samples_per_task}\n")
+        f.write(f"Number of training samples per task: {num_train_samples_per_task}\n")
+
+    print(f"\nMetrics saved to: {metrics_file}")
 
     return agent
 
 
 if __name__ == '__main__':
     class Config(Tap):
+        # required
+        ong: bool = False
         run_name: str
         group_id: str
+        
+        force_out_dim: int
+        no_class_remap: bool
+        dataset: str
 
+
+        # from add_arguments → class attrs
+        gpuid: List[int] = [0]
+       
+        optimizer: str = "SGD"
+        first_split_size: int = 2
+        other_split_size: int = 2
+        
+        train_aug: bool = False
+        rand_split: bool = False
+        rand_split_order: bool = False
+        schedule: List[int] = [5]
+        model_weights: Optional[str] = None
+        eval_on_train_set: bool = False
+        offline_training: bool = False
+        incremental_class: bool = False
+
+        # rest of your existing flags
         gpu: bool = True
         workers: int = 4
-
-        # repeat : int = 5
-        start_seed : int = 0
-        end_seed : int = 5
-        run_seed : int = 0
+        start_seed: int = 0
+        end_seed: int = 5
+        run_seed: int = 0
         val_size: int = 256
         lr: float = 1e-3
-        scheduler : bool = False
+        scheduler: bool = False
         nepoch: int = 5
         val_check_interval: int = 300
         batch_size: int = 256
-        train_percent_check: float = 1.
-
-        # 1 layer is either a weight layer of biais layer, the count starts from the out side of the DNN
-        # For multihead DNNs the heads are not taken into account in the count, the count starts from the layers below
-        ogd_start_layer : int = 0
-        ogd_end_layer : int = 1e6
-
+        train_percent_check: float = 1.0
+        ogd_start_layer: int = 0
+        ogd_end_layer: float = 1e6
         memory_size: int = 100
         hidden_dim: int = 100
         pca: bool = False
-        subset_size : float = None
-
-        # AGEM
-        agem_mem_batch_size : int = 256
-        no_transfer : bool = False
-
-        n_permutation : int = 0
-        n_rotate : int = 0
-        rotate_step : int = 0
-        is_split : bool = False
-        data_seed : int = 2
-        rotations : List = []
-
+        subset_size: Optional[float] = None
+        agem_mem_batch_size: int = 256
+        no_transfer: bool = False
+        n_permutation: int = 0
+        n_rotate: int = 0
+        rotate_step: int = 0
+        is_split: bool = False
+        data_seed: int = 2
+        rotations: List[int] = []
         toy: bool = False
         ogd: bool = False
         ogd_plus: bool = False
-
-        no_random_name : bool = False
-
-        project : str = "iclr-2021-cl-prod"
-        wandb_dryrun : bool = False
-        wandb_dir : str = SLURM_TMPDIR
-        # wandb_dir : str = "/scratch/thang/iclr-2021/wandb-offline"
-        dataroot : str = os.path.join(SLURM_TMPDIR, "datasets")
-
-        is_split_cub : bool = False
-
-        # Regularisation methods
-        reg_coef : float = 0.
-
-        agent_type : str = "ogd_plus"
-        agent_name : str = "OGD"
-        model_name : str = "MLP"
-        model_type : str = "mlp"
-
-        # Stable SGD
-        dropout : float = 0.
-        gamma : float = 1.
-        is_stable_sgd : bool = False
-
-
-        # Other :
-        momentum : float = 0.
-        weight_decay : float = 0.
-        print_freq : float = 100
-
-        no_val : bool = False
-
-        def add_arguments(self):
-            self.add_argument('--gpuid', nargs="+", type=int, default=[0],
-                              help="The list of gpuid, ex:--gpuid 3 1. Negative value means cpu-only", required=False)
-            self.add_argument('--force_out_dim', type=int, default=2,
-                              help="Set 0 to let the task decide the required output dimension", required=False)
-            self.add_argument('--optimizer', type=str, default='SGD',
-                              help="SGD|Adam|RMSprop|amsgrad|Adadelta|Adagrad|Adamax ...", required=False)
-            self.add_argument('--dataset', type=str, default='MNIST', help="MNIST(default)|CIFAR10|CIFAR100", required=False)
-            self.add_argument('--first_split_size', type=int, default=2, required=False)
-            self.add_argument('--other_split_size', type=int, default=2, required=False)
-            self.add_argument('--no_class_remap', dest='no_class_remap', default=False, action='store_true',
-                              help="Avoid the dataset with a subset of classes doing the remapping. Ex: [2,5,"
-                                   "6 ...] -> [0,1,2 ...]", required=False)
-            self.add_argument('--train_aug', dest='train_aug', default=False, action='store_true',
-                              help="Allow data augmentation during training", required=False)
-            self.add_argument('--rand_split', dest='rand_split', default=False, action='store_true',
-                              help="Randomize the classes in splits", required=False)
-            self.add_argument('--rand_split_order', dest='rand_split_order', default=False, action='store_true',
-                              help="Randomize the order of splits", required=False)
-            self.add_argument('--schedule', nargs="+", type=int, default=[5],
-                              help="The list of epoch numbers to reduce learning rate by factor of 0.1. Last number "
-                                   "is the end epoch", required=False)
-            self.add_argument('--model_weights', type=str, default=None,
-                              help="The path to the file for the model weights (*.pth).", required=False)
-            self.add_argument('--eval_on_train_set', dest='eval_on_train_set', default=False, action='store_true',
-                              help="Force the evaluation on train set", required=False)
-            self.add_argument('--offline_training', dest='offline_training', default=False, action='store_true',
-                              help="Non-incremental learning by make all data available in one batch. For measuring "
-                                   "the upperbound performance.", required=False)
-            self.add_argument('--incremental_class', dest='incremental_class', default=False, action='store_true',
-                              help="The number of output node in the single-headed model increases along with new "
-                                   "categories.", required=False)
+        no_random_name: bool = False
+        project: str = "testing-ogd"
+        wandb_dryrun: bool = False
+        wandb_dir: str = SLURM_TMPDIR
+        dataroot: str = os.path.join(SLURM_TMPDIR, "datasets")
+        is_split_cub: bool = False
+        reg_coef: float = 0.0
+        agent_type: str = "ogd_plus"
+        agent_name: str = "OGD"
+        model_name: str = "MLP"
+        model_type: str = "mlp"
+        dropout: float = 0.0
+        gamma: float = 1.0
+        is_stable_sgd: bool = False
+        momentum: float = 0.0
+        weight_decay: float = 0.0
+        print_freq: float = 100
+        no_val: bool = False
 
     # TODO : check known only
     config = Config().parse_args()
     config = config.as_dict()
     config = dotdict(config)
-
+    print(f"🤖🤖🤖🤖 config : {config}")
     if torch.cuda.device_count() == 0 :
         config.gpu = False
 
