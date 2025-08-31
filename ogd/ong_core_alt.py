@@ -6,7 +6,7 @@ from models.mlp import MLP_ONG_PRECOND, MLP_ONG
 import os
 import sys
 
-# figure out the root of “/home/yajatyadav/ong”
+# figure out the root
 _here = os.path.abspath(os.path.dirname(__file__))            # .../ogd
 root = os.path.abspath(os.path.join(_here, os.pardir,        # .../continual-learning-ogdplus
                                     os.pardir))              # .../ong
