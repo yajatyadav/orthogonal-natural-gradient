@@ -26,12 +26,3 @@ In order to replicate the results of the paper, please refer to the scripts prov
 This repository is based primarily on a frok from the repo [continual-learning-ogdplus[(https://github.com/MehdiAbbanaBennani/continual-learning-ogdplus), the official implementation of the article [Generalisation Guarantees for Continual Learning with Orthogonal
  Gradient
  Descent](https://arxiv.org/abs/2006.11942).
- ```
-@inproceedings{Hsu18_EvalCL,
-  title={Re-evaluating Continual Learning Scenarios: A Categorization and Case for Strong Baselines},
-  author={Yen-Chang Hsu and Yen-Cheng Liu and Anita Ramasamy and Zsolt Kira},
-  booktitle={NeurIPS Continual learning Workshop },
-  year={2018},
-  url={https://arxiv.org/abs/1810.12488}
-}
-```
