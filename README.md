@@ -17,6 +17,8 @@ In order to replicate the results of the paper, please refer to the scripts prov
 - To reproduce our results on Permuted-MNIST, run orthogonal-natural-gradient/scripts/commands/prod_permuted_mnist.sh
 - To reproduce our results on Rotated-MNIST< run orthogonal-natural-gradient/scripts/commands/prod_rotated_mnist.sh
 
+The main.py file serves as the entry point for all the experiments.
+
 ## Questions/ Bugs
 - For questions or bugs, please feel free to raise an issue on Github.
 
